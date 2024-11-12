@@ -5,7 +5,7 @@
 
 Name:           perl-Tk
 Version:        804.035
-Release:        7%{?dist}
+Release:        8%{?dist}
 Summary:        Perl Graphical User Interface ToolKit
 
 License:        (GPL+ or Artistic) and SWL
@@ -19,7 +19,8 @@ Patch2:         perl-Tk-seg.patch
 
 
 # Versions before this have Unicode issues
-BuildRequires: make
+BuildRequires:  coreutils
+BuildRequires:  make
 BuildRequires:  gcc-c++
 BuildRequires:  perl-devel >= 3:5.8.3
 BuildRequires:  perl-generators
@@ -64,6 +65,7 @@ BuildRequires:  perl(XSLoader)
 # X11 tests:
 BuildRequires:  xorg-x11-server-Xvfb
 BuildRequires:  xorg-x11-xinit
+BuildRequires:  google-noto-sans-fonts
 BuildRequires:  font(:lang=en)
 # Specific font is needed for tests, bug #1141117, CPAN RT#98831
 BuildRequires:  liberation-sans-fonts
@@ -103,6 +105,9 @@ Provides:       perl(Tk) = %{version}
 %global __provides_exclude %__provides_exclude|perl\\(Tk::Widget\\)$
 %global __provides_exclude %__provides_exclude|perl\\(Tk::Wm\\)$
 
+# Filter modules bundled for tests
+%global __provides_exclude_from %{?__provides_exclude_from:%__provides_exclude_from|}^%{_libexecdir}
+%global __requires_exclude %{?__requires_exclude:%__requires_exclude|}^perl\\(TkTest\\)
 
 %description
 This a re-port of a perl interface to Tk8.4.
@@ -120,28 +125,49 @@ Requires: perl-Tk = %{version}-%{release}
 %description devel
 %{summary}
 
+%package tests
+Summary:        Tests for %{name}
+Requires:       %{name} = %{?epoch:%{epoch}:}%{version}-%{release}
+Requires:       perl-Test-Harness
+# X11 tests:
+Requires:       xorg-x11-server-Xvfb
+Requires:       xorg-x11-xinit
+Requires:       google-noto-sans-fonts
+Requires:       font(:lang=en)
+Requires:       liberation-sans-fonts
+
+%description tests
+Tests from %{name}. Execute them
+with "%{_libexecdir}/%{name}/test".
+
 %prep
 %setup -q -n Tk-%{version}
 find . -type f -exec %{__perl} -pi -e \
 's,^(#!)(/usr/local)?/bin/perl\b,$1%{__perl}, if ($. == 1)' {} \;
 chmod -x pod/Popup.pod Tixish/lib/Tk/balArrow.xbm
 # fix for widget as docs
-%patch0
+%patch -P0
 %{__perl} -pi -e \
 's,\@demopath\@,%{?_pkgdocdir}%{!?_pkgdocdir:%{_docdir}/%{name}-%{version}}/demos,g' demos/widget
 # debian patch
-#%%patch1 -p1
+#%%patch -P1 -p1
 # patch to fix #235666 ... seems like caching code is broken
-%patch2 -p1 -b .seg
+%patch -P2 -p1 -b .seg
+
+# Help generators to recognize Perl scripts
+for F in t/*.t; do
+    perl -i -MConfig -ple 'print $Config{startperl} if $. == 1 && !s{\A#!.*perl\b}{$Config{startperl}}' "$F"
+    chmod +x "$F"
+done
 
 %build
-%{__perl} Makefile.PL INSTALLDIRS=vendor X11LIB=%{_libdir} XFT=0
+%{__perl} Makefile.PL INSTALLDIRS=vendor X11LIB=%{_libdir} XFT=1
 find . -name Makefile | xargs %{__perl} -pi -e 's/^\tLD_RUN_PATH=[^\s]+\s*/\t/'
 make %{?_smp_mflags}
 
 %check
 %if %{use_x11_tests}
-    xvfb-run -a make test
+    xvfb-run -d make test
 %endif
 
 %install
@@ -155,6 +181,28 @@ chmod -R u+rwX,go+rX,go-w $RPM_BUILD_ROOT/*
 mkdir __demos
 cp -pR $RPM_BUILD_ROOT%{perl_vendorarch}/Tk/demos __demos
 find __demos/ -type f -exec chmod -x {} \;
+
+# Install tests
+mkdir -p %{buildroot}%{_libexecdir}/%{name}
+cp -a t %{buildroot}%{_libexecdir}/%{name}
+rm %{buildroot}%{_libexecdir}/%{name}/t/pod.t
+mkdir -p %{buildroot}%{_libexecdir}/%{name}/demos/demos/images
+cp demos/demos/images/cursor* %{buildroot}%{_libexecdir}/%{name}/demos/demos/images
+perl -i -pe 's{-Mblib", "blib/script}{%{_bindir}}' %{buildroot}%{_libexecdir}/%{name}/t/exefiles.t
+perl -i -ne 'print $_ unless m{gedi}' %{buildroot}%{_libexecdir}/%{name}/t/exefiles.t
+
+cat > %{buildroot}%{_libexecdir}/%{name}/test << 'EOF'
+#!/bin/bash
+set -e
+# Some tests write into temporary files/directories
+DIR=$(mktemp -d)
+pushd "$DIR"
+cp -a %{_libexecdir}/%{name}/* ./
+xvfb-run -d prove -I . -j "$(getconf _NPROCESSORS_ONLN)"
+popd
+rm -rf "$DIR"
+EOF
+chmod +x %{buildroot}%{_libexecdir}/%{name}/test
 
 %files
 %doc Changes README README.linux ToDo pTk/*license* __demos/demos demos/widget COPYING
@@ -178,8 +226,15 @@ find __demos/ -type f -exec chmod -x {} \;
 %{perl_vendorarch}/Tk/install.pm
 %{perl_vendorarch}/Tk/MakeDepend.pm
 
+%files tests
+%{_libexecdir}/%{name}
 
 %changelog
+* Wed Mar 13 2024 Jitka Plesnikova <jplesnik@redhat.com> - 804.035-8
+- Enable building with FreeType support
+- Package tests
+- Resolves: RHEL-25202
+
 * Mon Aug 09 2021 Mohan Boddu <mboddu@redhat.com> - 804.035-7
 - Rebuilt for IMA sigs, glibc 2.34, aarch64 flags
   Related: rhbz#1991688
